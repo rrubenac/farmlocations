@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rubenacker Farms Locations</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px auto; padding: 0 20px; background-color: #f9f9f9; max-width: 800px; }
+        h1 { color: #2c3e50; border-bottom: 2px solid #2c3e50; padding-bottom: 5px; margin-bottom: 15px; }
+        #searchInput { width: 100%; padding: 8px; margin-bottom: 15px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; font-size: 14px; }
+        #farmList { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 10px; }
+        .farm-item { padding: 8px; background-color: #fff; border-radius: 4px; transition: background-color 0.3s ease; box-shadow: 0 1px 3px rgba(0,0,0,0.1); text-align: center; }
+        .farm-item:hover { background-color: #f5f5f5; }
+        a { color: #0066cc; text-decoration: none; font-weight: 500; }
+        a:hover { text-decoration: underline; color: #003366; }
+        .error { color: #d32f2f; background-color: #ffebee; padding: 10px; border-radius: 4px; grid-column: 1 / -1; }
+        button { padding: 8px 12px; margin-bottom: 15px; background-color: #2c3e50; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
+        button:hover { background-color: #1a252f; }
+        #authScreen { text-align: center; }
+        #authScreen input { width: 80%; padding: 8px; margin: 5px 0; border: 1px solid #ddd; border-radius: 4px; }
+        #content { display: none; }
+    </style>
+</head>
+<body>
+    <div id="authScreen">
+        <h1>Rubenacker Farms Access</h1>
+        <div id="phoneStep">
+            <p>Please enter your details for verification:</p>
+            <input type="text" id="userName" placeholder="Your Name">
+            <input type="tel" id="phoneNumber" placeholder="Phone (3175550123)">
+            <button id="sendCode">Send Code</button>
+        </div>
+        <div id="codeStep" style="display: none;">
+            <p>Enter the code sent to your phone:</p>
+            <input type="text" id="verificationCode" placeholder="6-digit code">
+            <button id="verifyCode">Verify</button>
+        </div>
+        <p id="authMessage"></p>
+    </div>
+    <div id="content">
+        <h1>Rubenacker Farms Locations</h1>
+        <input type="text" id="searchInput" placeholder="Search farms...">
+        <button id="sortButton">Sort A-Z</button>
+        <div id="farmList"></div>
+    </div>
+
+    <!-- Firebase Compatibility SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-firestore-compat.js"></script>
+    <script>
+        console.log('Script started');
+        // Firebase config (replace with your real config)
+        const firebaseConfig = {
+            apiKey: "AIzaSyDXBuZRkzJ2syD8dteVwveNL_tUvX5Hzk0",
+  authDomain: "rubenacker-farms.firebaseapp.com",
+  projectId: "rubenacker-farms",
+  storageBucket: "rubenacker-farms.firebasestorage.app",
+  messagingSenderId: "832577901318",
+  appId: "1:832577901318:web:a0c768204198b9a3f9c487"
+        };
+        firebase.initializeApp(firebaseConfig);
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+        console.log('Firebase initialized');
+
+        // Global variables
+        const csvUrl = "farms.csv";
+        let allFarms = [];
+        let isAscending = true;
+
+        // Check device approval and load data
+        document.addEventListener('DOMContentLoaded', () => {
+            console.log('DOM fully loaded');
+            if (localStorage.getItem('deviceApproved') === 'true') {
+                console.log('Device approved, loading farms');
+                document.getElementById('authScreen').style.display = 'none';
+                document.getElementById('content').style.display = 'block';
+                fetchFarmData();
+            }
+
+            // Invisible reCAPTCHA for phone auth
+            try {
+                window.recaptchaVerifier = new firebase.auth.RecaptchaVerifier('sendCode', {
+                    'size': 'invisible',
+                    'callback': () => console.log('reCAPTCHA solved')
+                });
+                console.log('reCAPTCHA initialized');
+            } catch (error) {
+                console.error('reCAPTCHA error:', error);
+            }
+
+            // Send verification code
+            const sendCodeButton = document.getElementById('sendCode');
+            if (sendCodeButton) {
+                console.log('sendCode button found');
+                sendCodeButton.addEventListener('click', async () => {
+                    console.log('Send Code clicked');
+                    const userName = document.getElementById('userName').value.trim();
+                    let phoneNumber = document.getElementById('phoneNumber').value.trim();
+                    if (!userName) {
+                        document.getElementById('authMessage').textContent = 'Please enter your name.';
+                        console.log('Missing name');
+                        return;
+                    }
+                    if (!phoneNumber.match(/^\d{10}$/)) {
+                        document.getElementById('authMessage').textContent = 'Enter a valid 10-digit phone number (e.g., 3175550123).';
+                        console.log('Invalid phone format');
+                        return;
+                    }
+                    const formattedPhoneNumber = `+1${phoneNumber}`;
+                    console.log('Checking phone:', formattedPhoneNumber);
+                    const phoneDoc = await db.collection('approvedPhoneNumbers').doc(formattedPhoneNumber).get();
+                    if (!phoneDoc.exists || !phoneDoc.data().approved) {
+                        document.getElementById('authMessage').textContent = 'Phone number not approved. Contact administrator.';
+                        console.log('Phone not approved');
+                        return;
+                    }
+                    console.log('Phone approved, sending code...');
+                    const appVerifier = window.recaptchaVerifier;
+                    auth.signInWithPhoneNumber(formattedPhoneNumber, appVerifier)
+                        .then(confirmationResult => {
+                            console.log('SMS sent');
+                            window.confirmationResult = confirmationResult;
+                            window.tempUserName = userName;
+                            document.getElementById('phoneStep').style.display = 'none';
+                            document.getElementById('codeStep').style.display = 'block';
+                            document.getElementById('authMessage').textContent = 'Code sent! Check your phone.';
+                        })
+                        .catch(error => {
+                            console.error('Send code error:', error);
+                            document.getElementById('authMessage').textContent = 'Error sending code: ' + error.message;
+                        });
+                });
+            } else {
+                console.error('sendCode button not found');
+            }
+
+            // Verify code and store name
+            const verifyCodeButton = document.getElementById('verifyCode');
+            if (verifyCodeButton) {
+                verifyCodeButton.addEventListener('click', () => {
+                    console.log('Verify Code clicked');
+                    const code = document.getElementById('verificationCode').value.trim();
+                    if (!code) {
+                        document.getElementById('authMessage').textContent = 'Please enter the code.';
+                        return;
+                    }
+                    window.confirmationResult.confirm(code)
+                        .then(result => {
+                            const user = result.user;
+                            db.collection('approvedUsers').doc(user.uid).set({
+                                name: window.tempUserName,
+                                phoneNumber: user.phoneNumber,
+                                approved: true,
+                                timestamp: firebase.firestore.FieldValue.serverTimestamp()
+                            }).then(() => {
+                                console.log('User data saved to Firestore');
+                                localStorage.setItem('deviceApproved', 'true');
+                                document.getElementById('authScreen').style.display = 'none';
+                                document.getElementById('content').style.display = 'block';
+                                fetchFarmData();
+                            }).catch(error => {
+                                console.error('Firestore write error:', error);
+                                document.getElementById('authMessage').textContent = 'Error saving data: ' + error.message;
+                            });
+                        })
+                        .catch(error => document.getElementById('authMessage').textContent = 'Invalid code: ' + error.message);
+                });
+            } else {
+                console.error('verifyCode button not found');
+            }
+
+            // Search functionality
+            document.getElementById('searchInput').addEventListener('input', function(e) {
+                const searchTerm = e.target.value.toLowerCase();
+                const filteredFarms = allFarms.filter(farm => farm.name.toLowerCase().includes(searchTerm));
+                displayFarms(filteredFarms);
+            });
+
+            // Sort functionality
+            document.getElementById('sortButton').addEventListener('click', function() {
+                isAscending = !isAscending;
+                this.textContent = isAscending ? 'Sort A-Z' : 'Sort Z-A';
+                const sortedFarms = [...allFarms].sort((a, b) => 
+                    isAscending ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name));
+                displayFarms(sortedFarms);
+            });
+        });
+
+        // Fetch farm data
+        async function fetchFarmData() {
+            try {
+                const response = await fetch(csvUrl);
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                const text = await response.text();
+                console.log('Raw CSV data:', text);
+                allFarms = parseCSV(text);
+                displayFarms(allFarms);
+            } catch (error) {
+                document.getElementById('farmList').innerHTML = `
+                    <div class="error">Error loading farm data: ${error.message}<br>Please ensure farms.csv is uploaded.</div>
+                `;
+            }
+        }
+
+        // Parse CSV
+        function parseCSV(csvText) {
+            if (!csvText || csvText.trim() === '') throw new Error('No data received from CSV');
+            const lines = csvText.trim().split('\n');
+            return lines.slice(1).map(line => {
+                const values = line.split(',').map(v => v.trim());
+                return { name: values[0], latitude: parseFloat(values[1]), longitude: parseFloat(values[2]) };
+            });
+        }
+
+        // Display farms
+        function displayFarms(farms) {
+            const container = document.getElementById('farmList');
+            container.innerHTML = '';
+            if (farms.length === 0) {
+                container.innerHTML = 'No farms found.';
+                return;
+            }
+            farms.forEach(farm => {
+                const div = document.createElement('div');
+                div.className = 'farm-item';
+                const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${farm.latitude},${farm.longitude}`;
+                div.innerHTML = `<a href="${mapsUrl}" target="_blank">${farm.name}</a>`;
+                container.appendChild(div);
+            });
+        }
+    </script>
+</body>
+</html>
